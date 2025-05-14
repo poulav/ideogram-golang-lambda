@@ -68,7 +68,7 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 	} else {
 		decodedBody = []byte(body)
 	}
-
+	log.Println("Decoded body:", string(decodedBody))
 	err = json.Unmarshal(decodedBody, &ideogramRequestBody)
 	if err != nil {
 		log.Println("Error unmarshalling request body:", err)
@@ -77,7 +77,9 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 			Body:       "Bad Request",
 		}, nil
 	}
-
+	
+	log.Println("Request body:", ideogramRequestBody)
+	
 	// Send the request to the ideogram endpoint and get the response
 	response, err := sendRequestToIdeogram(ideogramRequestBody)
 	if err != nil {
