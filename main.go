@@ -33,10 +33,11 @@ import (
 
 type IdeogramRequestBody struct {
     Prompt      string `json:"prompt"`
-    Resolution  string `json:"resolution"`
-    AspectRatio string `json:"aspect_ratio"`
-    NumImages   int    `json:"num_images"`
-    StyleType   string `json:"style_type"`
+    Resolution  *string `json:"resolution"`
+    AspectRatio *string `json:"aspect_ratio"`
+    NumImages   *int    `json:"num_images"`
+    StyleType   *string `json:"style_type"`
+	ColourPalette *string `json:"colour_palette"`
 }
 
 func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
@@ -100,13 +101,20 @@ func sendRequestToIdeogram(body IdeogramRequestBody) (string, error) {
 
 	// Add fields as per the API documentation
 	writer.WriteField("prompt", body.Prompt)
-	if body.Resolution != "" {
-		writer.WriteField("resolution", body.Resolution)
-	}else {
-		writer.WriteField("aspect_ratio", body.AspectRatio)
-	}	
-	writer.WriteField("num_images", fmt.Sprintf("%d", body.NumImages))
-	writer.WriteField("style_type", body.StyleType)
+	if body.Resolution != nil {
+		writer.WriteField("resolution", *body.Resolution)
+	}else if body.AspectRatio != nil {
+		writer.WriteField("aspect_ratio", *body.AspectRatio)
+	}
+	if body.NumImages != nil {
+		writer.WriteField("num_images", fmt.Sprintf("%d", *body.NumImages))
+	}
+	if body.StyleType != nil {
+		writer.WriteField("style_type", *body.StyleType)
+	}
+	if body.ColourPalette != nil {
+		writer.WriteField("color_palette", *body.ColourPalette)
+	}
 
 	writer.Close()
 
