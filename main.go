@@ -31,13 +31,20 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
+type ColourPalette struct {
+	Members []struct {
+		ColorHex    string  `json:"color_hex"`
+		ColorWeight *string `json:"color_weight,omitempty"`
+	} `json:"members,omitempty"`
+}
+
 type IdeogramRequestBody struct {
-    Prompt      string `json:"prompt"`
-    Resolution  *string `json:"resolution"`
-    AspectRatio *string `json:"aspect_ratio"`
-    NumImages   *int    `json:"num_images"`
-    StyleType   *string `json:"style_type"`
-	ColourPalette *string `json:"colour_palette"`
+	Prompt        string         `json:"prompt"`
+	Resolution    *string        `json:"resolution,omitempty"`
+	AspectRatio   *string        `json:"aspect_ratio,omitempty"`
+	NumImages     *int           `json:"num_images,omitempty"`
+	StyleType     *string        `json:"style_type,omitempty"`
+	ColourPalette *ColourPalette `json:"colour_palette,omitempty"`
 }
 
 func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
@@ -57,9 +64,9 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 				StatusCode: 400,
 				Body:       "Bad Request: invalid base64",
 			}, nil
-		} 
-	}else {
-			decodedBody = []byte(body)
+		}
+	} else {
+		decodedBody = []byte(body)
 	}
 
 	err = json.Unmarshal(decodedBody, &ideogramRequestBody)
@@ -103,7 +110,7 @@ func sendRequestToIdeogram(body IdeogramRequestBody) (string, error) {
 	writer.WriteField("prompt", body.Prompt)
 	if body.Resolution != nil {
 		writer.WriteField("resolution", *body.Resolution)
-	}else if body.AspectRatio != nil {
+	} else if body.AspectRatio != nil {
 		writer.WriteField("aspect_ratio", *body.AspectRatio)
 	}
 	if body.NumImages != nil {
@@ -113,7 +120,13 @@ func sendRequestToIdeogram(body IdeogramRequestBody) (string, error) {
 		writer.WriteField("style_type", *body.StyleType)
 	}
 	if body.ColourPalette != nil {
-		writer.WriteField("color_palette", *body.ColourPalette)
+		for i, member := range body.ColourPalette.Members {
+			memberPrefix := fmt.Sprintf("colour_palette[members][%d]", i)
+			writer.WriteField(memberPrefix+"[color_hex]", member.ColorHex)
+			if member.ColorWeight != nil {
+				writer.WriteField(memberPrefix+"[color_weight]", *member.ColorWeight)
+			}
+		}
 	}
 
 	writer.Close()
