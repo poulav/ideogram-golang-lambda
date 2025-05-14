@@ -28,7 +28,8 @@ Before you start, ensure you have the following installed and configured:
 - **AWS CLI**: Make sure you have the AWS CLI installed and configured with the appropriate credentials. You can download and configure AWS CLI from [https://aws.amazon.com/cli/](https://aws.amazon.com/cli/).
 - **AWS CloudFormation**: CloudFormation will be used to deploy resources such as Lambda functions, IAM roles, and API Gateway.
 
-[!NOTE]: If you are using cloudformation to deploy your lambda function then you would need to update the API_KEY under line number 49 of the aws_cloudformation_script.yaml file. Also, update line 52 with appropriate name of the zip file. To generate the artifact execute step 2 from below.
+[!NOTE] 
+If you are using cloudformation to deploy your lambda function then you would need to update the API_KEY under line number 49 of the aws_cloudformation_script.yaml file. Also, update line 52 with appropriate name of the zip file. To generate the artifact execute step 2 from below.
 
 ### Step 1: Set Up the API Key
 
