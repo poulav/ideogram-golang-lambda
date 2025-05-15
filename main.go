@@ -122,7 +122,7 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 	for i, _ := range ideogramResponse.Data {
 		// Assuming there's only one image in the response
 		imageURL := ideogramResponse.Data[i].URL
-		log.Println("Image URL:", imageURL)
+		// log.Println("Image URL:", imageURL)
 
 		// Download the image
 		imageData, err := downloadImage(imageURL)
@@ -147,9 +147,16 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 		s3URLs = append(s3URLs, s3URL)
 	}
 
+	responseBody, err := json.Marshal(map[string][]string{"image_urls": s3URLs})
+	if err != nil {
+		return events.LambdaFunctionURLResponse{
+			StatusCode: 500,
+			Body:       "Error marshaling response",
+		}, nil
+	}
 	return events.LambdaFunctionURLResponse{
 		StatusCode: 200,
-		Body:       fmt.Sprintf(`{"image_url": "%s"}`, s3URLs),
+		Body:       string(responseBody),
 	}, nil
 }
 
@@ -231,9 +238,25 @@ func downloadImage(url string) ([]byte, error) {
 
 // Upload the image to S3
 func uploadImageToS3(imageData []byte, filename string) (string, error) {
+	bucket_name := os.Getenv("BUCKET_NAME")
+
+	if bucket_name == "" {
+		return "", fmt.Errorf("BUCKET_NAME is not set")
+	}
+	folder_name := os.Getenv("FOLDER_NAME")
+
+	if folder_name == "" {
+		return "", fmt.Errorf("FOLDER_NAME is not set")
+	}
+	bucket_region := os.Getenv("BUCKET_REGION")
+
+	if bucket_region == "" {
+		return "", fmt.Errorf("BUCKET_REGION is not set")
+	}
+
 	// Create an S3 session
 	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String("us-east-1"),
+		Region: aws.String(bucket_region),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to create session: %v", err)
@@ -243,12 +266,11 @@ func uploadImageToS3(imageData []byte, filename string) (string, error) {
 	s3Svc := s3.New(sess)
 
 	// Set the bucket and key (file name)
-	bucket := "coachllc-public-bucket"
-	key := "Launch Accelerator/" + filename + ".png"
+	key := folder_name + "/" + filename + ".png"
 
 	// Upload the image
 	_, err = s3Svc.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String(bucket),
+		Bucket: aws.String(bucket_name),
 		Key:    aws.String(key),
 		Body:   bytes.NewReader(imageData),
 	})
@@ -257,7 +279,7 @@ func uploadImageToS3(imageData []byte, filename string) (string, error) {
 	}
 
 	// Return the S3 URL
-	s3URL := fmt.Sprintf("https://%s.s3.amazonaws.com/%s", bucket, key)
+	s3URL := fmt.Sprintf("https://%s.s3.amazonaws.com/%s", bucket_name, key)
 	return s3URL, nil
 }
 
