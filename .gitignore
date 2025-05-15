@@ -26,3 +26,4 @@ go.work.sum
 
 # Output file
 bootstrap
+.zip
