@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
@@ -29,6 +30,9 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 )
 
 type ColourPalette struct {
@@ -40,11 +44,24 @@ type ColourPalette struct {
 
 type IdeogramRequestBody struct {
 	Prompt        string         `json:"prompt"`
+	FileName      string         `json:"filename"`
 	Resolution    *string        `json:"resolution,omitempty"`
 	AspectRatio   *string        `json:"aspect_ratio,omitempty"`
 	NumImages     *int           `json:"num_images,omitempty"`
 	StyleType     *string        `json:"style_type,omitempty"`
 	ColourPalette *ColourPalette `json:"colour_palette,omitempty"`
+}
+
+type IdeogramResponse struct {
+	Created string `json:"created"`
+	Data    []struct {
+		Prompt      string `json:"prompt"`
+		Resolution  string `json:"resolution"`
+		IsImageSafe bool   `json:"is_image_safe"`
+		Seed        int    `json:"seed"`
+		URL         string `json:"url"`
+		StyleType   string `json:"style_type"`
+	} `json:"data"`
 }
 
 func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
@@ -77,9 +94,9 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 			Body:       "Bad Request",
 		}, nil
 	}
-	
+
 	log.Println("Request body:", ideogramRequestBody)
-	
+
 	// Send the request to the ideogram endpoint and get the response
 	response, err := sendRequestToIdeogram(ideogramRequestBody)
 	if err != nil {
@@ -90,9 +107,49 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 		}, nil
 	}
 
+	// After getting the response, download the image and upload it to S3
+	var ideogramResponse IdeogramResponse
+	err = json.Unmarshal([]byte(response), &ideogramResponse)
+	if err != nil {
+		log.Println("Error unmarshalling ideogram response:", err)
+		return events.LambdaFunctionURLResponse{
+			StatusCode: 500,
+			Body:       "Internal Server Error",
+		}, nil
+	}
+
+	s3URLs := make([]string, 0)
+	for i, _ := range ideogramResponse.Data {
+		// Assuming there's only one image in the response
+		imageURL := ideogramResponse.Data[i].URL
+		log.Println("Image URL:", imageURL)
+
+		// Download the image
+		imageData, err := downloadImage(imageURL)
+		if err != nil {
+			log.Println("Error downloading image:", err)
+			return events.LambdaFunctionURLResponse{
+				StatusCode: 500,
+				Body:       "Error downloading image",
+			}, nil
+		}
+
+		// Upload the image to S3
+		s3URL, err := uploadImageToS3(imageData, ideogramRequestBody.FileName)
+		if err != nil {
+			log.Println("Error uploading image to S3:", err)
+			return events.LambdaFunctionURLResponse{
+				StatusCode: 500,
+				Body:       "Error uploading image to S3",
+			}, nil
+		}
+		log.Println("Image uploaded to S3:", s3URL)
+		s3URLs = append(s3URLs, s3URL)
+	}
+
 	return events.LambdaFunctionURLResponse{
 		StatusCode: 200,
-		Body:       response,
+		Body:       fmt.Sprintf(`{"image_url": "%s"}`, s3URLs),
 	}, nil
 }
 
@@ -153,6 +210,55 @@ func sendRequestToIdeogram(body IdeogramRequestBody) (string, error) {
 	respBody := new(bytes.Buffer)
 	respBody.ReadFrom(resp.Body)
 	return respBody.String(), nil
+}
+
+// Download the image from the URL
+func downloadImage(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching image: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Read the image data
+	imageData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading image data: %v", err)
+	}
+
+	return imageData, nil
+}
+
+// Upload the image to S3
+func uploadImageToS3(imageData []byte, filename string) (string, error) {
+	// Create an S3 session
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String("us-east-1"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to create session: %v", err)
+	}
+
+	// Create an S3 service client
+	s3Svc := s3.New(sess)
+
+	// Set the bucket and key (file name)
+	bucket := "coachllc-public-bucket"
+	key := "Launch Accelerator/" + filename + ".png"
+
+	// Upload the image
+	_, err = s3Svc.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Body:   bytes.NewReader(imageData),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload image: %v", err)
+	}
+
+	// Return the S3 URL
+	s3URL := fmt.Sprintf("https://%s.s3.amazonaws.com/%s", bucket, key)
+	return s3URL, nil
 }
 
 func main() {
