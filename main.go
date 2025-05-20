@@ -26,6 +26,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -122,10 +123,19 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 	for i, _ := range ideogramResponse.Data {
 		// Assuming there's only one image in the response
 		imageURL := ideogramResponse.Data[i].URL
-		// log.Println("Image URL:", imageURL)
+
+		withoutBGImageURL, err := removeImageBG(imageURL)
+		if err != nil {
+			log.Println("Error removing image background:", err)
+			return events.LambdaFunctionURLResponse{
+				StatusCode: 500,
+				Body:       "Error removing image background",
+			}, nil
+		}
+		// log.Println("Image URL after removing background:", imageURL)
 
 		// Download the image
-		imageData, err := downloadImage(imageURL)
+		imageData, err := downloadImage(withoutBGImageURL)
 		if err != nil {
 			log.Println("Error downloading image:", err)
 			return events.LambdaFunctionURLResponse{
@@ -281,6 +291,34 @@ func uploadImageToS3(imageData []byte, filename string) (string, error) {
 	// Return the S3 URL
 	s3URL := fmt.Sprintf("https://%s.s3.amazonaws.com/%s", bucket_name, key)
 	return s3URL, nil
+}
+
+func removeImageBG(imageUrl string) (string, error) {
+
+	log.Println("Removing background for generated image via Freepik API")
+
+	url := "https://api.freepik.com/v1/ai/beta/remove-background"
+
+	payload := strings.NewReader("image_url="+imageUrl)
+	req, _ := http.NewRequest("POST", url, payload)
+
+	req.Header.Add("x-freepik-api-key", os.Getenv("FREEPIK_API_KEY"))
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Println("Error making HTTP request:", err)
+		return "", err
+	}
+	defer res.Body.Close()
+
+	body, error := io.ReadAll(res.Body)
+	if error != nil {
+		log.Println("Error reading response body:", error)
+		return "", error
+	}
+	
+	return string(body), nil
 }
 
 func main() {
