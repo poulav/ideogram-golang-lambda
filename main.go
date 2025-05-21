@@ -36,6 +36,13 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 )
 
+type FreepikResponse struct {
+	Original       string `json:"original,omitempty"`
+	HighResolution string `json:"high_resolution,omitempty"`
+	Preview        string `json:"preview,omitempty"`
+	URL            string `json:"url,omitempty"`
+}
+
 type ColourPalette struct {
 	Members []struct {
 		ColorHex    string  `json:"color_hex"`
@@ -96,8 +103,6 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 		}, nil
 	}
 
-	log.Println("Request body:", ideogramRequestBody)
-
 	// Send the request to the ideogram endpoint and get the response
 	response, err := sendRequestToIdeogram(ideogramRequestBody)
 	if err != nil {
@@ -108,7 +113,7 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 		}, nil
 	}
 
-	// After getting the response, download the image and upload it to S3
+	// After getting the response, download the image and send it to Freepik API
 	var ideogramResponse IdeogramResponse
 	err = json.Unmarshal([]byte(response), &ideogramResponse)
 	if err != nil {
@@ -120,22 +125,13 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 	}
 
 	s3URLs := make([]string, 0)
-	for i, _ := range ideogramResponse.Data {
+	for i := range ideogramResponse.Data {
 		// Assuming there's only one image in the response
 		imageURL := ideogramResponse.Data[i].URL
-
-		withoutBGImageURL, err := removeImageBG(imageURL)
-		if err != nil {
-			log.Println("Error removing image background:", err)
-			return events.LambdaFunctionURLResponse{
-				StatusCode: 500,
-				Body:       "Error removing image background",
-			}, nil
-		}
-		// log.Println("Image URL after removing background:", imageURL)
+		log.Println("Image URL from Ideogram:", imageURL)
 
 		// Download the image
-		imageData, err := downloadImage(withoutBGImageURL)
+		imageData, err := downloadImage(imageURL)
 		if err != nil {
 			log.Println("Error downloading image:", err)
 			return events.LambdaFunctionURLResponse{
@@ -153,8 +149,53 @@ func handleRequest(request events.LambdaFunctionURLRequest) (events.LambdaFuncti
 				Body:       "Error uploading image to S3",
 			}, nil
 		}
-		log.Println("Image uploaded to S3:", s3URL)
-		s3URLs = append(s3URLs, s3URL)
+		log.Println("Ideogram Image uploaded to S3:", s3URL)
+
+		// Remove Background via Freepik
+		response, err := removeImageBGviaFreepik(s3URL)
+		if err != nil {
+			log.Println("Error removing image background:", err)
+			return events.LambdaFunctionURLResponse{
+				StatusCode: 500,
+				Body:       "Error removing image background",
+			}, nil
+		}
+
+		// After getting the response from Freepik, download the image and upload it to S3
+		var freepikResponse FreepikResponse
+		err = json.Unmarshal([]byte(response), &freepikResponse)
+		if err != nil {
+			log.Println("Error unmarshalling ideogram response:", err)
+			return events.LambdaFunctionURLResponse{
+				StatusCode: 500,
+				Body:       "Internal Server Error",
+			}, nil
+		}
+
+		log.Println("Freepik response:", freepikResponse.URL)
+
+		// Download the Freepik image
+		freepikImage, err := downloadImage(freepikResponse.URL)
+		if err != nil {
+			log.Println("Error downloading image:", err)
+			return events.LambdaFunctionURLResponse{
+				StatusCode: 500,
+				Body:       "Error downloading image",
+			}, nil
+		}
+
+		// Upload the image to S3
+		fs3URL, err := uploadImageToS3(freepikImage, ideogramRequestBody.FileName)
+		if err != nil {
+			log.Println("Error uploading image to S3:", err)
+			return events.LambdaFunctionURLResponse{
+				StatusCode: 500,
+				Body:       "Error uploading image to S3",
+			}, nil
+		}
+		log.Println("Freepik Image uploaded to S3:", fs3URL)
+
+		s3URLs = append(s3URLs, fs3URL)
 	}
 
 	responseBody, err := json.Marshal(map[string][]string{"image_urls": s3URLs})
@@ -280,9 +321,10 @@ func uploadImageToS3(imageData []byte, filename string) (string, error) {
 
 	// Upload the image
 	_, err = s3Svc.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String(bucket_name),
-		Key:    aws.String(key),
-		Body:   bytes.NewReader(imageData),
+		Bucket:      aws.String(bucket_name),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(imageData),
+		ContentType: aws.String("image/png"),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to upload image: %v", err)
@@ -293,13 +335,12 @@ func uploadImageToS3(imageData []byte, filename string) (string, error) {
 	return s3URL, nil
 }
 
-func removeImageBG(imageUrl string) (string, error) {
-
-	log.Println("Removing background for generated image via Freepik API")
+func removeImageBGviaFreepik(imageUrl string) (string, error) {
 
 	url := "https://api.freepik.com/v1/ai/beta/remove-background"
 
-	payload := strings.NewReader("image_url="+imageUrl)
+	payload := strings.NewReader("image_url=" + imageUrl)
+
 	req, _ := http.NewRequest("POST", url, payload)
 
 	req.Header.Add("x-freepik-api-key", os.Getenv("FREEPIK_API_KEY"))
@@ -307,17 +348,14 @@ func removeImageBG(imageUrl string) (string, error) {
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Println("Error making HTTP request:", err)
-		return "", err
+		return "", fmt.Errorf("error sending request to Freepik: %v", err)
 	}
 	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
 
-	body, error := io.ReadAll(res.Body)
-	if error != nil {
-		log.Println("Error reading response body:", error)
-		return "", error
-	}
-	
+	// fmt.Println(res)
+	fmt.Println(string(body))
+
 	return string(body), nil
 }
 
