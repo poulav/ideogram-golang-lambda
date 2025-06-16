@@ -1,0 +1,128 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Resources:
+  # Lambda Execution Role
+  LambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service: "lambda.amazonaws.com"
+      Policies:
+        - PolicyName: "LambdaS3AndCloudWatchPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:*"
+                Resource: "*"
+              - Effect: "Allow"
+                Action:
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                Resource: !Sub "arn:aws:s3:::coachfoundation-lambda-artifacts/*"
+
+  # Check if S3 bucket exists or create the bucket
+  LambdaArtifactsBucket:
+    Type: "AWS::S3::Bucket"
+    Condition: BucketNotExist
+    Properties:
+      BucketName: "coachfoundation-lambda-artifacts"
+
+  # Lambda Function
+  LambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      FunctionName: "GoLambdaFunction"
+      Handler: "main"
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: "go1.x"
+      MemorySize: 512
+      Timeout: 300
+      Architecture: "arm64"
+      Environment:
+        Variables:
+          API_KEY: "Your-API-Key-Value" # Replace with your actual API key
+      Code:
+        S3Bucket: !Ref LambdaArtifactsBucket
+        S3Key: "lambda/artifacts/go-lambda.zip" # Specify the location of your Lambda artifact
+
+  # Lambda Execution Role Permission for API Gateway to Invoke Lambda
+  LambdaApiGatewayInvoke:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref LambdaFunction
+      Principal: "apigateway.amazonaws.com"
+
+  # API Gateway to expose Lambda via Function URL
+  LambdaFunctionUrl:
+    Type: "AWS::ApiGatewayV2::Api"
+    Properties:
+      Name: "GoLambdaFunctionApi"
+      ProtocolType: "HTTP"
+
+  # API Gateway Integration with Lambda
+  ApiGatewayIntegration:
+    Type: "AWS::ApiGatewayV2::Integration"
+    Properties:
+      ApiId: !Ref LambdaFunctionUrl
+      IntegrationType: "AWS_PROXY"
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations"
+      PayloadFormatVersion: "2.0"
+
+  # API Gateway Route to invoke Lambda function via HTTP
+  ApiGatewayRoute:
+    Type: "AWS::ApiGatewayV2::Route"
+    Properties:
+      ApiId: !Ref LambdaFunctionUrl
+      RouteKey: "ANY /"
+      Target: !Sub "integrations/${ApiGatewayIntegration.Ref}"
+
+  # API Gateway Deployment
+  ApiGatewayDeployment:
+    Type: "AWS::ApiGatewayV2::Deployment"
+    Properties:
+      ApiId: !Ref LambdaFunctionUrl
+
+  # CORS Configuration for Lambda Function URL
+  ApiGatewayCorsConfiguration:
+    Type: "AWS::ApiGatewayV2::CorsConfiguration"
+    Properties:
+      ApiId: !Ref LambdaFunctionUrl
+      AllowOrigins:
+        - "*"
+      AllowMethods:
+        - "GET"
+        - "POST"
+        - "PUT"
+        - "DELETE"
+        - "OPTIONS"
+      AllowHeaders:
+        - "*"
+      MaxAge: 86400 # Optional: Cache CORS pre-flight response for 1 day
+
+Conditions:
+  BucketNotExist:
+    !Not [!Condition BucketExists]
+
+Outputs:
+  LambdaFunctionName:
+    Value: !Ref LambdaFunction
+    Description: "Lambda Function Name"
+
+  LambdaRoleName:
+    Value: !Ref LambdaExecutionRole
+    Description: "Lambda Execution Role Name"
+
+  LambdaArtifactsBucketName:
+    Value: !Ref LambdaArtifactsBucket
+    Description: "S3 Bucket Name for Lambda Artifacts"
+  
+  ApiEndpoint:
+    Value: !Sub "https://${LambdaFunctionUrl}.execute-api.${AWS::Region}.amazonaws.com/"
+    Description: "Function URL to access the Lambda"
